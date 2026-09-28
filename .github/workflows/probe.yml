@@ -1,0 +1,79 @@
+name: probe
+
+# Records how late each scheduled run starts. Twelve crons a day form six pairs: within each
+# pair one run is on the hour (:00) and one at a random off-hour minute, so the arms share an
+# hour of day and differ only in minute. The minutes were drawn once with a CSPRNG (no multiples
+# of 5 for the off-hour arm) and are fixed, so the experiment is pre-registered.
+# Adapted from https://github.com/sgkim126/github-actions-schedule-latency (which runs 288 crons a day).
+on:
+  schedule:
+    - cron: '0 7 * * *'    # pair 07: on the hour
+    - cron: '9 7 * * *'   # pair 07: off the hour
+    - cron: '0 9 * * *'    # pair 09: on the hour
+    - cron: '44 9 * * *'   # pair 09: off the hour
+    - cron: '0 12 * * *'    # pair 12: on the hour
+    - cron: '57 12 * * *'   # pair 12: off the hour
+    - cron: '0 15 * * *'    # pair 15: on the hour
+    - cron: '29 15 * * *'   # pair 15: off the hour
+    - cron: '0 21 * * *'    # pair 21: on the hour
+    - cron: '39 21 * * *'   # pair 21: off the hour
+    - cron: '0 23 * * *'    # pair 23: on the hour
+    - cron: '57 23 * * *'   # pair 23: off the hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: append
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Record observation
+        env:
+          CRON: ${{ github.event.schedule }}
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          observed_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          # created_at: when GitHub created the run (event-delivery delay); observed_at - created_at
+          # is the wait for a runner.
+          read -r created_at started_at < <(gh api "repos/$REPO/actions/runs/$RUN_ID" \
+            --jq '[.created_at, .run_started_at] | @tsv')
+
+          if [[ "$EVENT" == schedule ]]; then
+            read -r minute hour _ <<< "$CRON"
+            scheduled_at="$(date -u --date "${observed_at%%T*} $hour:$minute:00" +'%Y-%m-%dT%H:%M:%SZ')"
+            if [[ "$scheduled_at" > "$observed_at" ]]; then
+              scheduled_at="$(date -u --date "$scheduled_at - 1 day" +'%Y-%m-%dT%H:%M:%SZ')"
+            fi
+            arm=$([[ "$minute" == 0 ]] && echo onhour || echo offhour)
+          else
+            scheduled_at="$observed_at"; hour=""; minute=""; arm=manual
+          fi
+          row="$(printf '%s\t' "$scheduled_at" "$arm" "$hour" "$minute" "$created_at" "$started_at" "$observed_at" "$RUN_ID" "$ATTEMPT")"
+          row="${row%$'\t'}"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git clone --quiet --branch measurements --single-branch \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" m
+          cd m
+          for attempt in 1 2 3 4 5 6; do
+            git pull --quiet --rebase origin measurements
+            printf '%s\n' "$row" >> observations.tsv
+            git add observations.tsv
+            git commit --quiet -m "observation $scheduled_at $arm"
+            git push --quiet origin measurements && exit 0
+            git reset --quiet --hard origin/measurements
+            sleep $((attempt * 3))
+          done
+          echo "push failed" >&2; exit 1
