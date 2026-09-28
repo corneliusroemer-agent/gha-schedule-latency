@@ -64,16 +64,16 @@ jobs:
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git clone --quiet --branch measurements --single-branch \
+          git clone --quiet --branch data --single-branch \
             "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" m
           cd m
           for attempt in 1 2 3 4 5 6; do
-            git pull --quiet --rebase origin measurements
+            git pull --quiet --rebase origin data
             printf '%s\n' "$row" >> observations.tsv
             git add observations.tsv
             git commit --quiet -m "observation $scheduled_at $arm"
-            git push --quiet origin measurements && exit 0
-            git reset --quiet --hard origin/measurements
+            git push --quiet origin data && exit 0
+            git reset --quiet --hard origin/data
             sleep $((attempt * 3))
           done
           echo "push failed" >&2; exit 1

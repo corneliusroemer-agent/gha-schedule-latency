@@ -1,6 +1,6 @@
 """Summarise observations.tsv: delay by arm, paired by hour, and missing runs.
 
-Usage: git show origin/measurements:observations.tsv | python3 scripts/analyze.py
+Usage: git show origin/data:observations.tsv | python3 scripts/analyze.py
 Delay = observed - scheduled; event delay = created - scheduled; runner wait = observed - created.
 Runs not seen within 24 h of their slot count as missing (a run later than that is misattributed
 to the next day's slot by probe.yml).
